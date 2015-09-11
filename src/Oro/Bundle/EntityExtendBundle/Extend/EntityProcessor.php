@@ -4,10 +4,12 @@ namespace Oro\Bundle\EntityExtendBundle\Extend;
 
 use Psr\Log\LoggerInterface;
 
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\HttpKernel\Profiler\Profiler;
 
 use Oro\Bundle\EntityConfigBundle\Tools\CommandExecutor;
 use Oro\Bundle\PlatformBundle\Maintenance\Mode as MaintenanceMode;
+use Oro\Bundle\EntityExtendBundle\Event\ExtendSchemaUpdateEvent;
 
 class EntityProcessor
 {
@@ -19,6 +21,12 @@ class EntityProcessor
 
     /** @var LoggerInterface */
     protected $logger;
+
+    /** @var Profiler  */
+    protected $profiler;
+
+    /** @var EventDispatcherInterface */
+    protected $eventDispatcher;
 
     /** @var array */
     protected $commands = [
@@ -34,21 +42,24 @@ class EntityProcessor
     ];
 
     /**
-     * @param MaintenanceMode $maintenance
-     * @param CommandExecutor $commandExecutor
-     * @param LoggerInterface $logger
-     * @param Profiler        $profiler
+     * @param MaintenanceMode          $maintenance
+     * @param CommandExecutor          $commandExecutor
+     * @param LoggerInterface          $logger
+     * @param EventDispatcherInterface $eventDispatcher
+     * @param Profiler                 $profiler
      */
     public function __construct(
         MaintenanceMode $maintenance,
         CommandExecutor $commandExecutor,
         LoggerInterface $logger,
+        EventDispatcherInterface $eventDispatcher,
         Profiler $profiler = null
     ) {
         $this->maintenance     = $maintenance;
         $this->commandExecutor = $commandExecutor;
         $this->logger          = $logger;
         $this->profiler        = $profiler;
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -71,8 +82,13 @@ class EntityProcessor
         $this->maintenance->activate();
 
         $isSuccess = $this->executeCommands($this->commands);
-        if ($isSuccess && $updateRouting) {
-            $isSuccess = $this->executeCommands($this->updateRoutingCommands);
+        if ($isSuccess) {
+            if ($updateRouting) {
+                $isSuccess = $this->executeCommands($this->updateRoutingCommands);
+            }
+
+            $event = new ExtendSchemaUpdateEvent($updateRouting);
+            $this->eventDispatcher->dispatch(ExtendSchemaUpdateEvent::NAME, $event);
         }
 
         return $isSuccess;
