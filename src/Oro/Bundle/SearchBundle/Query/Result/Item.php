@@ -55,6 +55,9 @@ class Item
      */
     protected $em;
 
+    /** @var object */
+    protected $entity;
+
     /**
      * @param ObjectManager $em
      * @param string|null   $entityName
@@ -134,7 +137,19 @@ class Item
      */
     public function getEntity()
     {
-        return $this->em->getRepository($this->entityName)->find($this->recordId);
+        return $this->entity ?: $this->em->getRepository($this->entityName)->find($this->recordId);
+    }
+
+    /**
+     * @param object $entity
+     *
+     * @return Item
+     */
+    public function setEntity($entity)
+    {
+        $this->entity = $entity;
+
+        return $this;
     }
 
     /**

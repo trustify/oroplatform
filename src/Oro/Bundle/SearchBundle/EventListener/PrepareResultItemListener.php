@@ -85,7 +85,7 @@ class PrepareResultItemListener
                 $needToHaveEntity = $idKey === false || count($routeParameters['parameters']) > 1;
 
                 if (!$entity && $needToHaveEntity) {
-                    $entity = $this->em->getRepository($name)->find($item->getRecordId());
+                    $entity = $item->getEntity();
                 }
 
                 foreach ($routeParameters['parameters'] as $parameter => $field) {

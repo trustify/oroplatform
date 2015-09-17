@@ -18,6 +18,7 @@ use Oro\Bundle\EntityBundle\ORM\DoctrineHelper;
 use Oro\Bundle\SearchBundle\Command\IndexCommand;
 use Oro\Bundle\SearchBundle\Entity\Query as QueryLog;
 use Oro\Bundle\SearchBundle\Event\BeforeSearchEvent;
+use Oro\Bundle\SearchBundle\Event\AfterSearchEvent;
 use Oro\Bundle\SearchBundle\Query\Query;
 use Oro\Bundle\SearchBundle\Query\Result;
 
@@ -97,6 +98,7 @@ abstract class AbstractEngine implements EngineInterface
         $searchResult = $this->doSearch($query);
         $result       = new Result($query, $searchResult['results'], $searchResult['records_count']);
 
+        $this->eventDispatcher->dispatch(AfterSearchEvent::EVENT_NAME, new AfterSearchEvent($result));
         if ($this->logQueries) {
             $this->logQuery($result);
         }
