@@ -5,8 +5,7 @@ namespace Oro\Component\EntitySerializer;
 use Doctrine\ORM\Query;
 use Doctrine\ORM\QueryBuilder;
 
-use Symfony\Component\Security\Acl\Voter\FieldVote;
-use Symfony\Component\Security\Core\Authorization\AuthorizationCheckerInterface;
+use Oro\Component\EntitySerializer\Filter\EntityAwareFilterInterface;
 
 /**
  * @todo: This is draft implementation of the entity serializer.
@@ -136,8 +135,8 @@ class EntitySerializer
     /** @var DataNormalizer */
     protected $dataNormalizer;
 
-    /** @var AuthorizationCheckerInterface Optional authentication checker */
-    protected $authChecker;
+    /** @var EntityAwareFilterInterface */
+    protected $fieldFilter;
 
     /**
      * @param DoctrineHelper           $doctrineHelper
@@ -167,14 +166,11 @@ class EntitySerializer
     }
 
     /**
-     * Inject authentication check to check field ACL
-     * if not injected - all fields are allowed
-     *
-     * @param AuthorizationCheckerInterface $authChecker
+     * @param EntityAwareFilterInterface $filter
      */
-    public function setAuthenticationChecker(AuthorizationCheckerInterface $authChecker)
+    public function setFieldsFilter(EntityAwareFilterInterface $filter)
     {
-        $this->authChecker = $authChecker;
+        $this->fieldFilter = $filter;
     }
 
     /**
@@ -237,8 +233,9 @@ class EntitySerializer
         $idFieldName = $this->doctrineHelper->getEntityIdFieldName($entityClass);
         if ($useIdAsKey) {
             foreach ($entities as $entity) {
-                // if AuthenticationChecker injected, check if entity allowed to be viewed
-                if ($this->authChecker && !$this->authChecker->isGranted('VIEW', $entity)) {
+                if ($this->fieldFilter
+                    && EntityAwareFilterInterface::FILTER_ALL === $this->fieldFilter->checkEntity($entity))
+                {
                     continue;
                 }
 
@@ -247,7 +244,9 @@ class EntitySerializer
             }
         } else {
             foreach ($entities as $entity) {
-                if ($this->authChecker && !$this->authChecker->isGranted('VIEW', $entity)) {
+                if ($this->fieldFilter
+                    && EntityAwareFilterInterface::FILTER_ALL === $this->fieldFilter->checkEntity($entity))
+                {
                     continue;
                 }
 
@@ -285,78 +284,76 @@ class EntitySerializer
         $resultFields   = $this->fieldAccessor->getFieldsToSerialize($entityClass, $config);
 
         foreach ($resultFields as $field) {
-            if (false === $this->isAllowedField($entity, $entityClass, $field)) {
+            $isFieldAllowed = $this->fieldFilter ?
+                $this->fieldFilter->checkField($entity, $entityClass, $field) :
+                EntityAwareFilterInterface::FILTER_NOTHING;
+
+            if (EntityAwareFilterInterface::FILTER_ALL === $isFieldAllowed) {
                 continue;
             }
 
-            $value = null;
-            if ($this->dataAccessor->tryGetValue($entity, $field, $value)) {
-                $targetConfig = ConfigUtil::getFieldConfig($config, $field);
-                if ($entityMetadata->isAssociation($field)) {
-                    if ($value !== null) {
-                        if (!empty($targetConfig[ConfigUtil::FIELDS])) {
-                            $targetEntityClass = $entityMetadata->getAssociationTargetClass($field);
-                            $targetEntityId    = $this->dataAccessor->getValue(
-                                $value,
-                                $this->doctrineHelper->getEntityIdFieldName($targetEntityClass)
-                            );
+            $targetConfig = ConfigUtil::getFieldConfig($config, $field);
+            $value = EntityAwareFilterInterface::FILTER_NOTHING === $isFieldAllowed ?
+                $this->serializeItemField($entity, $field, $entityClass, $entityMetadata, $targetConfig) :
+                null; // return field but without value
 
-                            $value = $this->serializeItem($value, $targetEntityClass, $targetConfig);
-                            $items = [$value];
-                            $this->loadRelatedData($items, $targetEntityClass, [$targetEntityId], $targetConfig);
-                            $value = reset($items);
-                            if (isset($targetConfig[ConfigUtil::POST_SERIALIZE])) {
-                                $value = $this->postSerialize($value, $targetConfig[ConfigUtil::POST_SERIALIZE]);
-                            }
-                        } else {
-                            $value = $this->dataTransformer->transform(
-                                $entityClass,
-                                $field,
-                                $value,
-                                $targetConfig
-                            );
-                        }
-                    }
-                } else {
-                    $value = $this->dataTransformer->transform(
-                        $entityClass,
-                        $field,
-                        $value,
-                        $targetConfig
-                    );
-                }
-                $result[$field] = $value;
-            } elseif ($this->fieldAccessor->isMetadataProperty($field)) {
-                $result[$field] = $this->fieldAccessor->getMetadataProperty($entity, $field, $entityMetadata);
-            }
+            $result[$field] = $value;
         }
 
         return $result;
     }
 
     /**
-     * @param array|object $entity
-     * @param string       $entityClass
-     * @param string       $field
+     * @param object         $entity
+     * @param string         $field
+     * @param string         $entityClass
+     * @param EntityMetadata $entityMetadata
+     * @param array          $targetConfig
      *
-     * @return bool
-     * @throws \Doctrine\ORM\ORMException
+     * @return array|mixed|null
      */
-    protected function isAllowedField($entity, $entityClass, $field)
+    protected function serializeItemField($entity, $field, $entityClass, EntityMetadata $entityMetadata, $targetConfig)
     {
-        if (!$this->authChecker) {
-            return true;
+        $value = null;
+        if ($this->dataAccessor->tryGetValue($entity, $field, $value)) {
+            if ($entityMetadata->isAssociation($field)) {
+                if ($value !== null) {
+                    if (!empty($targetConfig[ConfigUtil::FIELDS])) {
+                        $targetEntityClass = $entityMetadata->getAssociationTargetClass($field);
+                        $targetEntityId    = $this->dataAccessor->getValue(
+                            $value,
+                            $this->doctrineHelper->getEntityIdFieldName($targetEntityClass)
+                        );
+
+                        $value = $this->serializeItem($value, $targetEntityClass, $targetConfig);
+                        $items = [$value];
+                        $this->loadRelatedData($items, $targetEntityClass, [$targetEntityId], $targetConfig);
+                        $value = reset($items);
+                        if (isset($targetConfig[ConfigUtil::POST_SERIALIZE])) {
+                            $value = $this->postSerialize($value, $targetConfig[ConfigUtil::POST_SERIALIZE]);
+                        }
+                    } else {
+                        $value = $this->dataTransformer->transform(
+                            $entityClass,
+                            $field,
+                            $value,
+                            $targetConfig
+                        );
+                    }
+                }
+            } else {
+                $value = $this->dataTransformer->transform(
+                    $entityClass,
+                    $field,
+                    $value,
+                    $targetConfig
+                );
+            }
+        } elseif ($this->fieldAccessor->isMetadataProperty($field)) {
+            $value = $this->fieldAccessor->getMetadataProperty($entity, $field, $entityMetadata);
         }
 
-        $entityToCheck = $entity;
-        if (is_array($entityToCheck) && !empty($entityToCheck['entityId'])) {
-            $entityToCheck = $this->doctrineHelper->getEntityManager($entityClass)->getReference(
-                $entityClass,
-                $entity['entityId']
-            );
-        }
-
-        return $this->authChecker->isGranted('VIEW', new FieldVote($entityToCheck, $field));
+        return $value;
     }
 
     /**
