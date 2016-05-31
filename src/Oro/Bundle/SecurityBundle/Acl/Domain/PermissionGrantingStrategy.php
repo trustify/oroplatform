@@ -11,6 +11,8 @@ use Symfony\Component\Security\Acl\Model\AuditLoggerInterface;
 use Symfony\Component\Security\Acl\Exception\NoAceFoundException;
 
 use Oro\Bundle\EntityConfigBundle\DependencyInjection\Utils\ServiceLink;
+use Oro\Bundle\SecurityBundle\Acl\Extension\EntityAclExtension;
+use Oro\Bundle\SecurityBundle\Acl\Extension\FieldAclExtension;
 
 /**
  * The ACL extensions based permission granting strategy to apply to the access control list.
@@ -120,6 +122,17 @@ class PermissionGrantingStrategy implements PermissionGrantingStrategyInterface
                 $result = $this->hasSufficientPermissions($acl, $aces, $masks, $sids, $administrativeMode);
             }
         }
+
+        // fallback to object aces in order to grant access to (not restricted by mask) fields
+        // only in case when no aces were found on previous steps
+        if ($result === null && empty($aces)) {
+            $aces = $acl->getObjectAces();
+            $aces = empty($aces) ? $acl->getClassAces() : $aces;
+            if (!empty($aces)) {
+                $result = $this->hasSufficientPermissions($acl, $aces, $masks, $sids, $administrativeMode);
+            }
+        }
+
         // check parent ACEs if object and class ACEs were not found
         if ($result === null && $acl->isEntriesInheriting()) {
             $parentAcl = $acl->getParentAcl();
@@ -255,12 +268,18 @@ class PermissionGrantingStrategy implements PermissionGrantingStrategyInterface
     {
         $extension = $this->getContext()->getAclExtension();
         $aceMask   = $ace->getMask();
+
         if ($acl->getObjectIdentity()->getType() === ObjectIdentityFactory::ROOT_IDENTITY_TYPE) {
-            if ($acl->getObjectIdentity()->getIdentifier() !== $extension->getExtensionKey()) {
+            $isFieldExtension = FieldAclExtension::NAME == $extension->getExtensionKey();
+            $isEntityIdentity = EntityAclExtension::NAME == $acl->getObjectIdentity()->getIdentifier();
+            $isFieldFallback = $isFieldExtension && $isEntityIdentity;
+
+            if ($acl->getObjectIdentity()->getIdentifier() !== $extension->getExtensionKey() && !$isFieldFallback) {
                 return false;
             }
             $aceMask = $extension->adaptRootMask($aceMask, $this->getContext()->getObject());
         }
+
         if ($extension->getServiceBits($requiredMask) !== $extension->getServiceBits($aceMask)) {
             return false;
         }
