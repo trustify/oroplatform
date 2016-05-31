@@ -159,6 +159,7 @@ services:
         arguments:
             - @form.factory
             - @oro_filter.filter_utility
+            - @oro_entity.manager.dictionary.api
         tags:
             - { name: oro_filter.extension.orm_filter.filter, type: enum }
 
@@ -167,5 +168,6 @@ services:
         arguments:
             - @form.factory
             - @oro_filter.filter_utility
+            - @oro_filter.builder.many_relation
         tags:
             - { name: oro_filter.extension.orm_filter.filter, type: multi_enum }
