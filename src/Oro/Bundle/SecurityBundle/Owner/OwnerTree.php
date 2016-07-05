@@ -279,7 +279,7 @@ class OwnerTree implements OwnerTreeInterface
                 $this->getSubordinateBusinessUnitIds($buId),
                 $resultBuIds
             );
-            if (!empty($diff)) {
+            if ($diff) {
                 $resultBuIds = array_merge($resultBuIds, $diff);
             }
         }
@@ -301,6 +301,24 @@ class OwnerTree implements OwnerTreeInterface
             $buIds = $this->getOrganizationBusinessUnitIds($orgId);
             if (!empty($buIds)) {
                 $resultBuIds = array_merge($resultBuIds, $buIds);
+            }
+        }
+
+        return $resultBuIds;
+    }
+
+    /**
+     * Get all business units in system
+     *
+     * @return array
+     */
+    public function getAllBusinessUnitIds()
+    {
+        $resultBuIds = [];
+
+        if (is_array($this->organizationBusinessUnitIds) && count($this->organizationBusinessUnitIds)) {
+            foreach ($this->organizationBusinessUnitIds as $businessUnits) {
+                $resultBuIds = array_merge($resultBuIds, $businessUnits);
             }
         }
 
@@ -361,16 +379,7 @@ class OwnerTree implements OwnerTreeInterface
      */
     public function addDeepEntity($localLevelEntityId, $deepLevelEntityId)
     {
-        if ($deepLevelEntityId !== null) {
-            if (!isset($this->subordinateBusinessUnitIds[$deepLevelEntityId])) {
-                $this->subordinateBusinessUnitIds[$deepLevelEntityId] = [];
-            }
-            $this->subordinateBusinessUnitIds[$deepLevelEntityId][] = $localLevelEntityId;
-        }
-
-        if (!isset($this->subordinateBusinessUnitIds[$localLevelEntityId])) {
-            $this->subordinateBusinessUnitIds[$localLevelEntityId] = [];
-        }
+        $this->subordinateBusinessUnitIds[$localLevelEntityId] = $deepLevelEntityId;
     }
 
     /**
@@ -378,38 +387,85 @@ class OwnerTree implements OwnerTreeInterface
      */
     public function buildTree()
     {
-        $subordinateBusinessUnitIds = $this->subordinateBusinessUnitIds;
-        foreach ($subordinateBusinessUnitIds as &$deepLevelEntityIds) {
-            if (!empty($deepLevelEntityIds)) {
-                /**
-                 * We have to add some element to the end of array and remove it after processing,
-                 * otherwise the last element of the original array will not be processed.
-                 */
-                $deepLevelEntityIds[] = 'EndOfArray';
-                foreach ($deepLevelEntityIds as $position => $deepLevelEntityId) {
-                    if ($deepLevelEntityId === 'EndOfArray') {
-                        $deepLevelEntityIds = array_slice($deepLevelEntityIds, 0, -1);
-                        break;
+        $subordinateBusinessUnitIds = [];
+        $mapping = [];
+
+        $calculatedLevels = $this->calculateAdjacencyListLevels();
+
+        $levelsData = array_reverse($calculatedLevels);
+        foreach ($levelsData as $childIds) {
+            foreach ($childIds as $childId) {
+                $subordinateBusinessUnitIds[$childId] = [];
+                $parentsId = $this->subordinateBusinessUnitIds[$childId];
+
+                if (null !== $parentsId) {
+                    $mapping[$parentsId][] = $childId;
+                }
+
+                if (isset($mapping[$childId])) {
+                    if (null !== $parentsId) {
+                        $mapping[$parentsId] = array_merge($mapping[$parentsId], $mapping[$childId]);
                     }
-                    if (!empty($subordinateBusinessUnitIds[$deepLevelEntityId])) {
-                        $diff = array_diff(
-                            $subordinateBusinessUnitIds[$deepLevelEntityId],
-                            $deepLevelEntityIds
-                        );
-                        if ($diff) {
-                            array_splice(
-                                $deepLevelEntityIds,
-                                $position,
-                                1,
-                                array_merge([$deepLevelEntityId], $diff)
-                            );
-                        }
-                    }
+                    $subordinateBusinessUnitIds[$childId] = array_merge(
+                        $subordinateBusinessUnitIds[$childId],
+                        $mapping[$childId]
+                    );
                 }
             }
         }
 
         $this->subordinateBusinessUnitIds = $subordinateBusinessUnitIds;
+    }
+
+    /**
+     * Takes business units adjacency list and calculates tree level for each item in list.
+     *
+     * For details about Adjacency Lists see https://en.wikipedia.org/wiki/Adjacency_list
+     * The only limitation for the algorithm is the input list should be sorted by parentId, at least all elements
+     *  that do not has parentId should go first.
+     * So we walk through all items and if item has parent - take parent level, increment it by 1 and assign to self.
+     * For example:
+     *
+     *  id    -  parentID          Tree                        id    -  parentID  - level
+     * ------------------       --------------------           ----------------------------
+     *  b1    -  null              b1                          b1    -  null         0
+     *  b2    -  null               +-- b11                    b2    -  null         0
+     *  b11   -  b1                 |   +-- b111               b11   -  b1           1
+     *  b12   -  b1                 |       +-- b1111          b12   -  b1           1
+     *  b21   -  b2                 |       +-- b1112          b21   -  b2           1
+     *  b111  -  b11                +-- b12                    b111  -  b11          2
+     *  b121  -  b12                    +-- b121               b121  -  b12          2
+     *  b122  -  b12                    +-- b122               b122  -  b12          2
+     *  b1111 -  b111                       +-- b1221          b1111 -  b111         3
+     *  b1112 -  b111              b2                          b1112 -  b111         3
+     *  b1221 -  b122               +-- b21                    b1221 -  b122         3
+     *
+     * @return array Collection of business unit ids grouped by level
+     */
+    protected function calculateAdjacencyListLevels()
+    {
+        $levelsData = [];
+
+        $hasUnprocessedRows = true;
+        while ($hasUnprocessedRows) {
+            $hasUnprocessedRows = false;
+            while (list($i) = each($this->subordinateBusinessUnitIds)) {
+                if ($this->subordinateBusinessUnitIds[$i] === null && !isset($levelsData[$i])) {
+                    $levelsData[$i] = 0;
+                } elseif (!isset($levelsData[$i]) && isset($levelsData[$this->subordinateBusinessUnitIds[$i]])) {
+                    $levelsData[$i] = $levelsData[$this->subordinateBusinessUnitIds[$i]] + 1;
+                } elseif (!isset($levelsData[$i])) {
+                    $hasUnprocessedRows = true;
+                }
+            }
+        }
+
+        $result = [];
+        foreach ($levelsData as $id => $level) {
+            $result[$level][] = $id;
+        }
+
+        return $result;
     }
 
     /**

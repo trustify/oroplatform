@@ -36,6 +36,7 @@ parameters:
     oro_locale.twig.number.class: Oro\Bundle\LocaleBundle\Twig\NumberExtension
 
     oro_locale.formatter.datetime.class: Oro\Bundle\LocaleBundle\Formatter\DateTimeValueFormatter
+    oro_locale.formatter.date.class: Oro\Bundle\LocaleBundle\Formatter\DateValueFormatter
 
 services:
     oro_locale.cache:
@@ -235,6 +236,14 @@ services:
         tags:
             - { name: oro_formatter, formatter: datetime }
 
+    oro_locale.format.date:
+        class: %oro_locale.formatter.date.class%
+        arguments:
+            - '@oro_locale.formatter.date_time'
+            - '@translator'
+        tags:
+            - { name: oro_formatter, formatter: date }
+
     oro_locale.entity_name_provider:
         class: %oro_locale.entity_name_provider.class%
         public: false
@@ -243,3 +252,12 @@ services:
             - @oro_locale.dql.formatter.name.link
         tags:
             - { name: oro_entity.name_provider, priority: -90 }
+
+    oro_locale.twig.date_time_user:
+        class: Oro\Bundle\LocaleBundle\Twig\DateTimeUserExtension
+        arguments:
+            - '@oro_locale.formatter.date_time'
+        calls:
+            - [setConfigManager, ['@oro_config.manager']]
+        tags:
+            - { name: twig.extension }

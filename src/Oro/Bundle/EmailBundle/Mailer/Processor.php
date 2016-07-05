@@ -17,7 +17,6 @@ use Oro\Bundle\EmailBundle\Entity\EmailOrigin;
 use Oro\Bundle\EmailBundle\Entity\EmailUser;
 use Oro\Bundle\EmailBundle\Entity\InternalEmailOrigin;
 use Oro\Bundle\EmailBundle\Entity\Manager\EmailActivityManager;
-use Oro\Bundle\EmailBundle\Entity\Provider\EmailOwnerProvider;
 use Oro\Bundle\EmailBundle\Event\EmailBodyAdded;
 use Oro\Bundle\EmailBundle\Form\Model\Email as EmailModel;
 use Oro\Bundle\EmailBundle\Form\Model\EmailAttachment as EmailAttachmentModel;
@@ -25,10 +24,11 @@ use Oro\Bundle\EmailBundle\Model\FolderType;
 use Oro\Bundle\EmailBundle\Tools\EmailAddressHelper;
 use Oro\Bundle\EmailBundle\Tools\EmailOriginHelper;
 use Oro\Bundle\EntityBundle\ORM\DoctrineHelper;
-use Oro\Bundle\EntityConfigBundle\DependencyInjection\Utils\ServiceLink;
 use Oro\Bundle\ImapBundle\Entity\UserEmailOrigin;
 use Oro\Bundle\OrganizationBundle\Entity\OrganizationInterface;
 use Oro\Bundle\SecurityBundle\Encoder\Mcrypt;
+use Oro\Bundle\EmailBundle\Entity\Provider\EmailOwnerProvider;
+use Oro\Bundle\EntityConfigBundle\DependencyInjection\Utils\ServiceLink;
 use Oro\Bundle\SecurityBundle\SecurityFacade;
 
 /**
@@ -62,20 +62,20 @@ class Processor
     /** @var  EmailActivityManager */
     protected $emailActivityManager;
 
-    /** @var SecurityFacade */
-    protected $securityFacade;
-
     /** @var EventDispatcherInterface */
     protected $eventDispatcher;
 
-    /** @var array */
-    protected $origins = [];
+    /** @var SecurityFacade */
+    protected $securityFacade;
 
     /** @var Mcrypt */
     protected $encryptor;
 
     /** @var EmailOriginHelper */
     protected $emailOriginHelper;
+
+    /** @var array */
+    protected $origins = [];
 
     /**
      * @SuppressWarnings(PHPMD.ExcessiveParameterList)
@@ -120,64 +120,39 @@ class Processor
      *
      * @param EmailModel $model
      * @param EmailOrigin $origin Origin to send email with
+     * @param bool $persist
      *
      * @return EmailUser
      * @throws \Swift_SwiftException
      */
-    public function process(EmailModel $model, $origin = null)
+    public function process(EmailModel $model, $origin = null, $persist = true)
     {
         $this->assertModel($model);
         $messageDate     = new \DateTime('now', new \DateTimeZone('UTC'));
         $parentMessageId = $this->getParentMessageId($model);
+        $message = $this->prepareMessage($model, $parentMessageId, $messageDate);
 
-        /** @var \Swift_Message $message */
-        $message = $this->mailer->createMessage();
-        if ($parentMessageId) {
-            $message->getHeaders()->addTextHeader('References', $parentMessageId);
-            $message->getHeaders()->addTextHeader('In-Reply-To', $parentMessageId);
-        }
-        $message->setDate($messageDate->getTimestamp());
-        $message->setFrom($this->getAddresses($model->getFrom()));
-        $message->setTo($this->getAddresses($model->getTo()));
-        $message->setCc($this->getAddresses($model->getCc()));
-        $message->setBcc($this->getAddresses($model->getBcc()));
-        $message->setSubject($model->getSubject());
-        $message->setBody($model->getBody(), $model->getType() === 'html' ? 'text/html' : 'text/plain');
-
-        $this->addAttachments($message, $model);
-        $this->processEmbeddedImages($message, $model);
-
-        $messageId = '<' . $message->generateId() . '>';
-
-        if ($origin === null) {
-            $this->emailOriginHelper->setEmailModel($model);
+        if ($origin === null && $persist) {
             $origin = $this->getEmailOrigin($model->getFrom(), $model->getOrganization());
         }
         $this->processSend($message, $origin);
 
-        $emailUser = $this->createEmailUser($model, $messageDate, $origin);
-        $emailUser->addFolder($this->getFolder($model->getFrom(), $origin));
-        $emailUser->getEmail()->setEmailBody(
-            $this->emailEntityBuilder->body($message->getBody(), $model->getType() === 'html', true)
-        );
-        $emailUser->getEmail()->setMessageId($messageId);
-        $emailUser->setSeen(true);
-        if ($parentMessageId) {
-            $emailUser->getEmail()->setRefs($parentMessageId);
+        $emailUser = $this->prepareEmailUser($model, $origin, $message, $messageDate, $parentMessageId);
+
+        if ($persist) {
+            // persist the email and all related entities such as folders, email addresses etc.
+            $this->emailEntityBuilder->getBatch()->persist($this->getEntityManager());
+            $this->persistAttachments($model, $emailUser->getEmail());
+
+            // associate the email with the target entity if exist
+            $contexts = $model->getContexts();
+            foreach ($contexts as $context) {
+                $this->emailActivityManager->addAssociation($emailUser->getEmail(), $context);
+            }
+
+            // flush all changes to the database
+            $this->getEntityManager()->flush();
         }
-
-        // persist the email and all related entities such as folders, email addresses etc.
-        $this->emailEntityBuilder->getBatch()->persist($this->getEntityManager());
-        $this->persistAttachments($model, $emailUser->getEmail());
-
-        // associate the email with the target entity if exist
-        $contexts = $model->getContexts();
-        foreach ($contexts as $context) {
-            $this->emailActivityManager->addAssociation($emailUser->getEmail(), $context);
-        }
-
-        // flush all changes to the database
-        $this->getEntityManager()->flush();
 
         $event = new EmailBodyAdded($emailUser->getEmail());
         $this->eventDispatcher->dispatch(EmailBodyAdded::NAME, $event);
@@ -192,8 +167,14 @@ class Processor
      *
      * @return EmailUser
      */
-    protected function createEmailUser(EmailModel $model, $messageDate, EmailOrigin $origin)
+    protected function createEmailUser(EmailModel $model, $messageDate, $origin)
     {
+        $owner = null;
+        $organization = null;
+        if ($origin) {
+            $owner = $origin->getOwner();
+            $organization = $origin->getOrganization();
+        }
         $emailUser = $this->emailEntityBuilder->emailUser(
             $model->getSubject(),
             $model->getFrom(),
@@ -204,15 +185,16 @@ class Processor
             Email::NORMAL_IMPORTANCE,
             $model->getCc(),
             $model->getBcc(),
-            $origin->getOwner(),
-            $origin->getOrganization()
+            $owner,
+            $organization
         );
-        $emailUser->setOrigin($origin);
-
-        if ($origin instanceof UserEmailOrigin) {
-            if ($origin->getMailbox() !== null) {
-                $emailUser->setOwner(null);
-                $emailUser->setMailboxOwner($origin->getMailbox());
+        if ($origin) {
+            $emailUser->setOrigin($origin);
+            if ($origin instanceof UserEmailOrigin) {
+                if ($origin->getMailbox() !== null) {
+                    $emailUser->setOwner(null);
+                    $emailUser->setMailboxOwner($origin->getMailbox());
+                }
             }
         }
 
@@ -247,12 +229,12 @@ class Processor
      * Process send email message. In case exist custom smtp host/port use it
      *
      * @param \Swift_Message  $message
-     * @param UserEmailOrigin $emailOrigin
+     * @param EmailOrigin $emailOrigin
      * @throws \Swift_SwiftException
      */
     public function processSend($message, $emailOrigin)
     {
-        if ($emailOrigin instanceof UserEmailOrigin) {
+        if ($emailOrigin && $emailOrigin instanceof UserEmailOrigin) {
             /* Modify transport smtp settings */
             if ($emailOrigin->isSmtpConfigured()) {
                 $this->mailer->prepareSmtpTransport($emailOrigin);
@@ -372,8 +354,6 @@ class Processor
     }
 
     /**
-     * Find existing email origin entity by email string or create and persist new one.
-     *
      * @param string                $email
      * @param OrganizationInterface $organization
      * @param string                $originName
@@ -483,5 +463,68 @@ class Processor
         }
 
         return $this->em;
+    }
+
+    /**
+     * @param EmailModel $model
+     * @param string $parentMessageId
+     * @param \DateTime $messageDate
+     *
+     * @return \Swift_Message
+     */
+    protected function prepareMessage(EmailModel $model, $parentMessageId, $messageDate)
+    {
+        /** @var \Swift_Message $message */
+        $message = $this->mailer->createMessage();
+        if ($parentMessageId) {
+            $message->getHeaders()->addTextHeader('References', $parentMessageId);
+            $message->getHeaders()->addTextHeader('In-Reply-To', $parentMessageId);
+        }
+        $addresses = $this->getAddresses($model->getFrom());
+        $address = $this->emailAddressHelper->extractPureEmailAddress($model->getFrom());
+        $message->setDate($messageDate->getTimestamp());
+        $message->setFrom($addresses);
+        $message->setReplyTo($addresses);
+        $message->setReturnPath($address);
+        $message->setTo($this->getAddresses($model->getTo()));
+        $message->setCc($this->getAddresses($model->getCc()));
+        $message->setBcc($this->getAddresses($model->getBcc()));
+        $message->setSubject($model->getSubject());
+        $message->setBody($model->getBody(), $model->getType() === 'html' ? 'text/html' : 'text/plain');
+
+        $this->addAttachments($message, $model);
+        $this->processEmbeddedImages($message, $model);
+
+        return $message;
+    }
+
+    /**
+     * @param EmailModel $model
+     * @param EmailOrigin $origin
+     * @param \Swift_Message $message
+     * @param \DateTime $messageDate
+     * @param string $parentMessageId
+     *
+     * @return EmailUser
+     */
+    protected function prepareEmailUser(EmailModel $model, $origin, $message, $messageDate, $parentMessageId)
+    {
+        $messageId = '<' . $message->generateId() . '>';
+        $emailUser = $this->createEmailUser($model, $messageDate, $origin);
+        if ($origin) {
+            $emailUser->addFolder($this->getFolder($model->getFrom(), $origin));
+        }
+        $emailUser->getEmail()->setEmailBody(
+            $this->emailEntityBuilder->body($message->getBody(), $model->getType() === 'html', true)
+        );
+        $emailUser->getEmail()->setMessageId($messageId);
+        $emailUser->setSeen(true);
+        if ($parentMessageId) {
+            $emailUser->getEmail()->setRefs($parentMessageId);
+
+            return $emailUser;
+        }
+
+        return $emailUser;
     }
 }

@@ -272,6 +272,18 @@ class OwnerTreeTest extends \PHPUnit_Framework_TestCase
         $this->assertEquals(array('bu2', 'bu3'), $tree->getBusinessUnitsIdByUserOrganizations('user'));
     }
 
+    public function testAddBusinessUsersAndGetAllBusinessUnitIds()
+    {
+        $tree = new OwnerTree();
+
+        $tree->addBusinessUnit('bu1', 1);
+        $tree->addBusinessUnit('bu2', 2);
+        $tree->addBusinessUnit('bu3', 2);
+        $tree->addBusinessUnit('bu4', 3);
+
+        $this->assertEquals(['bu1', 'bu2', 'bu3', 'bu4'], $tree->getAllBusinessUnitIds());
+    }
+
     public static function addBusinessUnitRelationProvider()
     {
         return array(
@@ -297,9 +309,9 @@ class OwnerTreeTest extends \PHPUnit_Framework_TestCase
             ),
             '1: [11, 12] reverse' => array(
                 array(
+                    array('1', null),
                     array('12', '1'),
                     array('11', '1'),
-                    array('1', null),
                 ),
                 array(
                     '1' => array('12', '11'),
@@ -311,8 +323,8 @@ class OwnerTreeTest extends \PHPUnit_Framework_TestCase
                 array(
                     array('1', null),
                     array('11', '1'),
-                    array('111', '11'),
                     array('12', '1'),
+                    array('111', '11'),
                 ),
                 array(
                     '1' => array('11', '111', '12'),
@@ -325,16 +337,16 @@ class OwnerTreeTest extends \PHPUnit_Framework_TestCase
                 array(
                     array('1', null),
                     array('11', '1'),
-                    array('111', '11'),
-                    array('1111', '111'),
-                    array('1112', '111'),
                     array('12', '1'),
+                    array('111', '11'),
                     array('121', '12'),
                     array('122', '12'),
+                    array('1111', '111'),
+                    array('1112', '111'),
                     array('1221', '122'),
                 ),
                 array(
-                    '1' => array('11', '111', '1111', '1112', '12', '121', '122', '1221'),
+                    '1' => array('11', '111', '1111', '1112', '12', '121', '122',  '1221'),
                     '11' => array('111', '1111', '1112'),
                     '111' => array('1111', '1112'),
                     '1111' => array(),

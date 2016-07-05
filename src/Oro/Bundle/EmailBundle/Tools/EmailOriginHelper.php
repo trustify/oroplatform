@@ -9,12 +9,15 @@ use Doctrine\ORM\EntityManager;
 use Oro\Bundle\EmailBundle\Entity\EmailFolder;
 use Oro\Bundle\EmailBundle\Entity\InternalEmailOrigin;
 use Oro\Bundle\EmailBundle\Entity\Mailbox;
+use Oro\Bundle\EmailBundle\Entity\Provider\EmailOwnerProvider;
 use Oro\Bundle\EmailBundle\Form\Model\Email as EmailModel;
 use Oro\Bundle\EmailBundle\Model\FolderType;
 use Oro\Bundle\EntityBundle\ORM\DoctrineHelper;
 use Oro\Bundle\ImapBundle\Entity\UserEmailOrigin;
 use Oro\Bundle\OrganizationBundle\Entity\OrganizationInterface;
 use Oro\Bundle\UserBundle\Entity\User;
+use Oro\Bundle\SecurityBundle\SecurityFacade;
+use Oro\Component\DependencyInjection\ServiceLink;
 
 /**
  * Class EmailOriginHelper
@@ -34,8 +37,9 @@ class EmailOriginHelper
     /**
      * @param DoctrineHelper $doctrineHelper
      */
-    public function __construct(DoctrineHelper $doctrineHelper)
-    {
+    public function __construct(
+        DoctrineHelper $doctrineHelper
+    ) {
         $this->doctrineHelper = $doctrineHelper;
     }
 
@@ -65,11 +69,6 @@ class EmailOriginHelper
             $origin = $this->getEntityManager()
                 ->getRepository('OroEmailBundle:InternalEmailOrigin')
                 ->findOneBy(['internalName' => $originName]);
-        }
-
-        if ($this->isEmptyOrigin($origin)) {
-            $user   = $this->emailModel->getCampaignOwner();
-            $origin = $this->getPreferredOrigin($user, $organization, $enableUseUserEmailOrigin);
         }
 
         return $origin;

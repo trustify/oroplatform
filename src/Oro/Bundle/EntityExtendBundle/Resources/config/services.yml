@@ -330,6 +330,12 @@ services:
         tags:
             - { name: oro_datagrid.extension.action.type, type: ajaxdeletefield }
 
+    oro_entity_extend.datagrid.action.type.ajaxrestorefield:
+        class: Oro\Bundle\EntityExtendBundle\Grid\Action\AjaxRestoreFieldAction
+        scope: prototype
+        tags:
+            - { name: oro_datagrid.extension.action.type, type: ajaxrestorefield }
+
     oro_entity_extend.validation_loader:
         class: %oro_entity_extend.validation_loader.class%
         public: false
@@ -398,6 +404,7 @@ services:
         arguments:
             - @oro_entity_config.config_manager
         tags:
+            - { name: oro_entity.exclusion_provider.default }
             - { name: oro_entity.exclusion_provider.api, priority: 10 }
 
     oro_entity_extend.exclusion_provider.enum:
