@@ -80,10 +80,6 @@ class OrganizationsSelectType extends AbstractType
             FormEvents::PRE_SUBMIT,
             function (FormEvent $event) {
                 $data = is_string($event->getData()) ? json_decode($event->getData(), true) : $event->getData();
-
-                $organizations = json_decode(reset($data['organizations']));
-                $data['organizations'] = $organizations->organizations;
-
                 $event->setData($data);
             }
         );
