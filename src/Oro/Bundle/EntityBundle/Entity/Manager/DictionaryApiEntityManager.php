@@ -101,7 +101,7 @@ class DictionaryApiEntityManager extends ApiEntityManager
         $searchFields = $this->dictionaryHelper->getSearchFields($this->getMetadata(), $entityMetadata);
         $representationField = $this->dictionaryHelper->getRepresentationField($this->getMetadata(), $entityMetadata);
 
-        $qb = $this->getListQueryBuilder(10, 1, [], null, []);
+        $qb = $this->getListQueryBuilder(100, 1, [], null, []);
         if (!empty($searchQuery)) {
             foreach ($searchFields as $searchField) {
                 $qb->orWhere('e.' . $searchField . ' LIKE :translated_title');
